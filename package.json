@@ -1,0 +1,21 @@
+{
+  "name": "bio-pdf-service",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "@sparticuz/chromium": "^123.0.1",
+    "@supabase/supabase-js": "^2.39.0",
+    "next": "14.2.3",
+    "pdf-lib": "^1.17.1",
+    "puppeteer-core": "^22.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}
