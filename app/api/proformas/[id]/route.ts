@@ -1,12 +1,13 @@
 import { NextResponse } from "next/server";
-import chromium from "@sparticuz/chromium";
+import chromium from "@sparticuz/chromium-min";
 import puppeteer from "puppeteer-core";
 import { PDFDocument } from "pdf-lib";
 import { createClient } from "@supabase/supabase-js";
 
-// ✅ Máximo tiempo permitido en Vercel (60s en plan Pro, 10s en Hobby)
-export const maxDuration = 60;
+// ✅ IMPORTANTE para Vercel
+export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+export const maxDuration = 60;
 
 const PRODUCT_PDF_BUCKET = "product-pdfs";
 
@@ -16,28 +17,32 @@ const supabase = createClient(
   { auth: { persistSession: false } }
 );
 
-// URL de tu app en Render (donde está la página /proformas/[id]/pdf)
-const RENDER_APP_URL = process.env.RENDER_APP_URL ?? "https://bio-cotizador.onrender.com";
+const RENDER_APP_URL =
+  process.env.RENDER_APP_URL ?? "https://bio-cotizador.onrender.com";
 
 export async function GET(
   req: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: { id: string } } // 🔥 corregido (NO Promise)
 ) {
   let browser = null;
 
   try {
-    const resolved = await params;
-    const id = Number(resolved.id);
+    const id = Number(params.id);
 
     if (!Number.isFinite(id)) {
       return NextResponse.json({ error: "ID inválido" }, { status: 400 });
     }
 
-    if (!process.env.NEXT_PUBLIC_SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-      return NextResponse.json({ error: "Faltan variables de entorno" }, { status: 500 });
+    if (
+      !process.env.NEXT_PUBLIC_SUPABASE_URL ||
+      !process.env.SUPABASE_SERVICE_ROLE_KEY
+    ) {
+      return NextResponse.json(
+        { error: "Faltan variables de entorno" },
+        { status: 500 }
+      );
     }
 
-    // ✅ Queries en paralelo
     const [{ data: proforma, error: proErr }, { data: rawItems, error: itemsErr }] =
       await Promise.all([
         supabase.from("proformas").select("id, number").eq("id", id).single(),
@@ -63,41 +68,30 @@ export async function GET(
       )
     ) as number[];
 
-    // ✅ Query de productos + render Puppeteer en paralelo
     const [productsResult, mainPdf] = await Promise.all([
       productIds.length > 0
         ? supabase.from("products").select("id, pdf_path").in("id", productIds)
         : Promise.resolve({ data: [], error: null }),
 
       (async () => {
-        // ✅ En Vercel/serverless: lanzar y cerrar browser por request
         browser = await puppeteer.launch({
-          args: [
-            ...chromium.args,
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--disable-gpu",
-          ],
+          args: chromium.args,
           executablePath: await chromium.executablePath(),
           headless: true,
-          defaultViewport: { width: 1280, height: 720 },
         });
 
         const page = await browser.newPage();
 
-        // ✅ Bloqueamos recursos innecesarios
         await page.setRequestInterception(true);
-        page.on("request", (interceptedReq: any) => {
-          const type = interceptedReq.resourceType();
+        page.on("request", (req: any) => {
+          const type = req.resourceType();
           if (["font", "media"].includes(type)) {
-            interceptedReq.abort();
+            req.abort();
           } else {
-            interceptedReq.continue();
+            req.continue();
           }
         });
 
-        // ✅ Puppeteer apunta a tu app en Render
         await page.goto(`${RENDER_APP_URL}/proformas/${id}/pdf`, {
           waitUntil: "networkidle0",
           timeout: 25000,
@@ -117,7 +111,10 @@ export async function GET(
     ]);
 
     if (productsResult.error) {
-      return NextResponse.json({ error: productsResult.error.message }, { status: 500 });
+      return NextResponse.json(
+        { error: productsResult.error.message },
+        { status: 500 }
+      );
     }
 
     const pdfPaths = Array.from(
@@ -128,37 +125,38 @@ export async function GET(
       )
     ) as string[];
 
-    // ✅ Descarga de PDFs anexos en paralelo
     const annexBuffers = await Promise.allSettled(
       pdfPaths.map(async (pdfPath) => {
-        const { data: fileData, error: fileErr } = await supabase.storage
+        const { data, error } = await supabase.storage
           .from(PRODUCT_PDF_BUCKET)
           .download(pdfPath);
 
-        if (fileErr || !fileData) {
-          console.error("No se pudo descargar PDF:", pdfPath, fileErr?.message);
-          return null;
-        }
-        return fileData.arrayBuffer();
+        if (error || !data) return null;
+
+        return data.arrayBuffer();
       })
     );
 
-    // ✅ Merge de PDFs
     const mergedPdf = await PDFDocument.create();
 
     const mainDoc = await PDFDocument.load(mainPdf);
-    const mainPages = await mergedPdf.copyPages(mainDoc, mainDoc.getPageIndices());
+    const mainPages = await mergedPdf.copyPages(
+      mainDoc,
+      mainDoc.getPageIndices()
+    );
     mainPages.forEach((p) => mergedPdf.addPage(p));
 
     for (const result of annexBuffers) {
       if (result.status !== "fulfilled" || !result.value) continue;
+
       try {
         const annexDoc = await PDFDocument.load(result.value);
-        const annexPages = await mergedPdf.copyPages(annexDoc, annexDoc.getPageIndices());
+        const annexPages = await mergedPdf.copyPages(
+          annexDoc,
+          annexDoc.getPageIndices()
+        );
         annexPages.forEach((p) => mergedPdf.addPage(p));
-      } catch (e) {
-        console.error("No se pudo anexar PDF:", e);
-      }
+      } catch {}
     }
 
     const finalPdfBytes = await mergedPdf.save();
@@ -166,12 +164,16 @@ export async function GET(
     return new NextResponse(Buffer.from(finalPdfBytes), {
       headers: {
         "Content-Type": "application/pdf",
-        "Content-Disposition": `attachment; filename="proforma-${String(proforma.number).padStart(8, "0")}.pdf"`,
+        "Content-Disposition": `attachment; filename="proforma-${String(
+          proforma.number
+        ).padStart(8, "0")}.pdf"`,
       },
     });
   } catch (error: any) {
     if (browser) {
-      try { await (browser as any).close(); } catch {}
+      try {
+        await browser.close();
+      } catch {}
     }
 
     return NextResponse.json(
