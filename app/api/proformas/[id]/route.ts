@@ -4,10 +4,9 @@ import puppeteer from "puppeteer-core";
 import { PDFDocument } from "pdf-lib";
 import { createClient } from "@supabase/supabase-js";
 
-// ✅ IMPORTANTE para Vercel
 export const runtime = "nodejs";
-export const dynamic = "force-dynamic";
 export const maxDuration = 60;
+export const dynamic = "force-dynamic";
 
 const PRODUCT_PDF_BUCKET = "product-pdfs";
 
@@ -22,12 +21,13 @@ const RENDER_APP_URL =
 
 export async function GET(
   req: Request,
-  { params }: { params: { id: string } } // 🔥 corregido (NO Promise)
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  let browser = null;
+  let browser: puppeteer.Browser | null = null;
 
   try {
-    const id = Number(params.id);
+    const resolved = await params;
+    const id = Number(resolved.id);
 
     if (!Number.isFinite(id)) {
       return NextResponse.json({ error: "ID inválido" }, { status: 400 });
@@ -83,12 +83,12 @@ export async function GET(
         const page = await browser.newPage();
 
         await page.setRequestInterception(true);
-        page.on("request", (req: any) => {
-          const type = req.resourceType();
+        page.on("request", (request: any) => {
+          const type = request.resourceType();
           if (["font", "media"].includes(type)) {
-            req.abort();
+            request.abort();
           } else {
-            req.continue();
+            request.continue();
           }
         });
 
@@ -132,7 +132,6 @@ export async function GET(
           .download(pdfPath);
 
         if (error || !data) return null;
-
         return data.arrayBuffer();
       })
     );
@@ -140,10 +139,7 @@ export async function GET(
     const mergedPdf = await PDFDocument.create();
 
     const mainDoc = await PDFDocument.load(mainPdf);
-    const mainPages = await mergedPdf.copyPages(
-      mainDoc,
-      mainDoc.getPageIndices()
-    );
+    const mainPages = await mergedPdf.copyPages(mainDoc, mainDoc.getPageIndices());
     mainPages.forEach((p) => mergedPdf.addPage(p));
 
     for (const result of annexBuffers) {
